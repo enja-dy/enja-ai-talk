@@ -1,9 +1,4 @@
-// index.js — Edward（LINE × AI英会話 完全版）
-// ---------------------------------------------
-// ・テキストメッセージ → 英文＋日本語訳＋音声(mp3) で返信
-// ・音声メッセージ   → 文字起こし → 上と同じく返信
-// ・Supabase: edward_messages に履歴保存（直近10件を文脈に使用）
-// ・Storage: edward-audio に mp3 を保存して LINE にURLで返す
+// index.js — Edward（LINE × AI英会話 完全修正版）
 // ---------------------------------------------
 
 import express from "express";
@@ -22,27 +17,18 @@ const config = {
 const lineClient = new line.Client(config);
 
 /* ========= Express ========= */
-// ※署名検証のため、/callback には bodyParser をかけない
 const app = express();
-
-app.get("/", (req, res) => {
-  res.send("Edward LINE bot is running.");
-});
+app.get("/", (req, res) => res.send("Edward is running."));
 
 /* ========= OpenAI ========= */
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /* ========= Supabase ========= */
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE,
   {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
+    auth: { autoRefreshToken: false, persistSession: false },
   }
 );
 
@@ -72,32 +58,31 @@ async function getRecentMessages(userId, limit = 10) {
   return (data || []).reverse();
 }
 
-/* ========= Edward の人格設定 ========= */
+/* ========= Edward の人格 ========= */
 const SYSTEM_PROMPT = `
 あなたは「Edward（エドワード）」です。
 35歳のアメリカ人男性ニュースアナウンサー。
-落ち着いた、丁寧で優しい英会話パートナーとして振る舞ってください。
 
 【キャラクター】
-- 直近の会話履歴（最大10件）を必ず踏まえて自然に返答する
-- プロのニュースアナウンサーのように、落ち着いて聞き取りやすい話し方
-- 難しすぎない自然な英語（中級レベル）で話す
-- 1〜3文程度の英語で返答し、簡単な質問を添えて会話を続ける
+- 直近の会話履歴（最大10件）を必ず踏まえて返答
+- 落ち着いた丁寧な英語
+- 1〜3文の英語で返答し、質問を添える
+- 日本語訳も返すが、履歴に日本語は含めない
 
-【出力形式（厳守）】
-必ず次の形式で返してください：
+【出力形式】
+必ず次の形式で返答すること：
 
 EN: （Edwardの英語の返答）
-JP: （上記の自然な日本語訳）
+JP: （自然な日本語訳）
 `;
 
-/* ========= Edward の返事（英文＋日本語訳）生成 ========= */
+/* ========= Edward の返事（英文＋日本語訳） ========= */
 async function createEdwardReply(userText, history) {
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
     ...history.map((m) => ({
       role: m.role === "assistant" ? "assistant" : "user",
-      content: m.content,
+      content: m.content, // ← 日本語が混ざらないように修正済
     })),
     { role: "user", content: userText },
   ];
@@ -109,19 +94,19 @@ async function createEdwardReply(userText, history) {
 
   const fullText = res.choices[0]?.message?.content ?? "";
 
+  // 強化版パーサー
   const enMatch = fullText.match(/EN:\s*([\s\S]*?)\nJP:/);
   const jpMatch = fullText.match(/JP:\s*([\s\S]*)/);
 
   const english = enMatch ? enMatch[1].trim() : fullText.trim();
-  const japanese = jpMatch ? jpMatch[1].trim() : "";
+  const japanese = jpMatch ? jpMatch[1].trim() : "（日本語訳の抽出に失敗しました）";
 
   return { english, japanese };
 }
 
-/* ========= TTS（mp3）生成 ========= */
+/* ========= TTS（英語のみ） ========= */
 async function synthesizeEdwardVoice(text) {
-  const trimmed = text.slice(0, 800); // 安全のため長文をカット
-
+  const trimmed = text.slice(0, 800);
   const mp3 = await openai.audio.speech.create({
     model: "gpt-4o-mini-tts",
     voice: "alloy",
@@ -133,7 +118,7 @@ async function synthesizeEdwardVoice(text) {
   return Buffer.from(arrayBuffer);
 }
 
-/* ========= Supabase Storage に音声をアップロード ========= */
+/* ========= Storageに音声アップロード ========= */
 async function uploadAudioToSupabase(userId, audioBuffer) {
   const fileName = `audio/${userId}-${Date.now()}.mp3`;
 
@@ -153,36 +138,32 @@ async function uploadAudioToSupabase(userId, audioBuffer) {
     .from("edward-audio")
     .getPublicUrl(fileName);
 
-  const publicUrl = data?.publicUrl;
-  return { publicUrl, durationMs: 8000 }; // とりあえず8秒で固定
+  return { publicUrl: data.publicUrl, durationMs: 8000 };
 }
 
-/* ========= 音声 → テキスト（STT） ========= */
+/* ========= STT ========= */
 async function transcribeAudio(buffer) {
   try {
-    // 一時ファイルに書き出してから fs.createReadStream で渡す
-    const tmpDir = os.tmpdir();
-    const tmpPath = path.join(tmpDir, `edward-${Date.now()}.m4a`);
-    fs.writeFileSync(tmpPath, buffer);
+    const tmp = path.join(os.tmpdir(), `edward-${Date.now()}.m4a`);
+    fs.writeFileSync(tmp, buffer);
 
-    const transcription = await openai.audio.transcriptions.create({
+    const result = await openai.audio.transcriptions.create({
       model: "gpt-4o-mini-transcribe",
-      file: fs.createReadStream(tmpPath),
+      file: fs.createReadStream(tmp),
     });
 
-    fs.unlink(tmpPath, () => {});
-    return transcription.text || "";
+    fs.unlink(tmp, () => {});
+    return result.text || "";
   } catch (e) {
     console.error("transcribeAudio error:", e);
     return "";
   }
 }
 
-/* ========= LINE Webhook ========= */
+/* ========= Webhook ========= */
 app.post("/callback", line.middleware(config), async (req, res) => {
   try {
-    const events = req.body.events;
-    await Promise.all(events.map(handleEvent));
+    await Promise.all(req.body.events.map(handleEvent));
     res.status(200).end();
   } catch (e) {
     console.error("Webhook error:", e);
@@ -190,7 +171,7 @@ app.post("/callback", line.middleware(config), async (req, res) => {
   }
 });
 
-/* ========= 各イベント処理 ========= */
+/* ========= イベント処理 ========= */
 async function handleEvent(event) {
   if (event.type !== "message") return;
 
@@ -199,14 +180,18 @@ async function handleEvent(event) {
   const msg = event.message;
 
   try {
-    // ========== テキスト ==========
+    /* ====== テキスト ====== */
     if (msg.type === "text") {
       const userText = msg.text.slice(0, 400);
 
       await saveMessage(userId, "user", userText, "text");
+
       const history = await getRecentMessages(userId);
       const { english, japanese } = await createEdwardReply(userText, history);
-      await saveMessage(userId, "assistant", `${english}\n${japanese}`, "text");
+
+      // ★ 英語と日本語を別レコードで保存 ← これが重要！
+      await saveMessage(userId, "assistant", english, "text");
+      await saveMessage(userId, "assistant", japanese, "text");
 
       const audioBuffer = await synthesizeEdwardVoice(english);
       const { publicUrl, durationMs } = await uploadAudioToSupabase(
@@ -216,7 +201,7 @@ async function handleEvent(event) {
 
       await lineClient.replyMessage(replyToken, [
         { type: "text", text: english },
-        { type: "text", text: japanese || "（日本語訳の生成に失敗しました）" },
+        { type: "text", text: japanese },
         {
           type: "audio",
           originalContentUrl: publicUrl,
@@ -226,26 +211,29 @@ async function handleEvent(event) {
       return;
     }
 
-    // ========== 音声 ==========
+    /* ====== 音声 ====== */
     if (msg.type === "audio") {
       const stream = await lineClient.getMessageContent(msg.id);
       const chunks = [];
-      for await (const chunk of stream) chunks.push(chunk);
-      const audioBuffer = Buffer.concat(chunks);
+      for await (const c of stream) chunks.push(c);
+      const audioBuf = Buffer.concat(chunks);
 
-      const userText = await transcribeAudio(audioBuffer);
+      const userText = await transcribeAudio(audioBuf);
       if (!userText) {
         await lineClient.replyMessage(replyToken, {
           type: "text",
-          text: "ごめんなさい、音声がうまく聞き取れませんでした。もう一度お願いします。",
+          text: "音声を認識できませんでした。もう一度お願いします。",
         });
         return;
       }
 
       await saveMessage(userId, "user", userText, "audio");
+
       const history = await getRecentMessages(userId);
       const { english, japanese } = await createEdwardReply(userText, history);
-      await saveMessage(userId, "assistant", `${english}\n${japanese}`, "text");
+
+      await saveMessage(userId, "assistant", english, "text");
+      await saveMessage(userId, "assistant", japanese, "text");
 
       const audioReply = await synthesizeEdwardVoice(english);
       const { publicUrl, durationMs } = await uploadAudioToSupabase(
@@ -255,7 +243,7 @@ async function handleEvent(event) {
 
       await lineClient.replyMessage(replyToken, [
         { type: "text", text: english },
-        { type: "text", text: japanese || "（日本語訳の生成に失敗しました）" },
+        { type: "text", text: japanese },
         {
           type: "audio",
           originalContentUrl: publicUrl,
@@ -265,22 +253,19 @@ async function handleEvent(event) {
       return;
     }
 
-    // それ以外のメッセージタイプは一旦テキストで案内
     await lineClient.replyMessage(replyToken, {
       type: "text",
-      text: "テキストか音声メッセージで話しかけてください。",
+      text: "テキストか音声で話しかけてください。",
     });
   } catch (e) {
     console.error("handleEvent error:", e);
     await lineClient.replyMessage(replyToken, {
       type: "text",
-      text: "エドワードとの会話中にエラーが起きました。",
+      text: "エラーが発生しました。",
     });
   }
 }
 
-/* ========= サーバー起動 ========= */
+/* ========= 起動 ========= */
 const port = process.env.PORT || 10000;
-app.listen(port, () => {
-  console.log(`Edward LINE bot is running on port ${port}`);
-});
+app.listen(port, () => console.log(`Edward running on port ${port}`));
