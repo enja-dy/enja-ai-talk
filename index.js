@@ -1,4 +1,4 @@
-// index.js — Edward（LINE × AI英会話 完全版 v2）
+// index.js — Rachel（LINE × AI英会話 完全版 v2）
 // --------------------------------------------------
 
 import express from "express";
@@ -19,7 +19,7 @@ const lineClient = new line.Client(config);
 /* ========= Express ========= */
 const app = express();
 app.get("/", (req, res) => {
-  res.send("Edward LINE bot is running v2.");
+  res.send("Rachel LINE bot is running v2.");
 });
 
 /* ========= OpenAI ========= */
@@ -62,27 +62,27 @@ async function getRecentMessages(userId, limit = 10) {
   return (data || []).reverse();
 }
 
-/* ========= Edward の人格設定 ========= */
+/* ========= Rachel の人格設定 ========= */
 const SYSTEM_PROMPT = `
-あなたは「Edward（エドワード）」です。
-35歳のアメリカ人男性ニュースアナウンサー。
+あなたは「Rachel（レイチェル）」です。
+35歳のアメリカ人女性ニュースアナウンサー。
 
 【キャラクター】
-- 落ち着いた丁寧な英会話パートナー
-- 中級レベルの英語を使う
-- 直近10件の会話を必ず踏まえて返答
-- 1〜3文の英語で話し、簡単な質問を添える
+- 落ち着いた、丁寧で優しい英会話パートナー
+- 中級レベルの自然な英語を使う
+- 直近10件の会話履歴を必ず踏まえて返答する
+- 1〜3文の英語で話し、最後に簡単な質問を添えて会話を続ける
 
 【重要】
 あなたの返答は EN と JP の2種類を必ず返してください。
 `;
 
-/* ========= Edward の返事（英文＋日本語訳） ========= */
-async function createEdwardReply(userText, history) {
+/* ========= Rachel の返事（英文＋日本語訳） ========= */
+async function createRachelReply(userText, history) {
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
 
-    // 日本語訳を履歴に混ぜない
+    // 日本語訳を履歴に混ぜない（assistant は英語だけ保存されている想定）
     ...history.map((m) => ({
       role: m.role === "assistant" ? "assistant" : "user",
       content: m.content,
@@ -103,7 +103,7 @@ async function createEdwardReply(userText, history) {
 
   const fullText = res.choices[0]?.message?.content ?? "";
 
-  // 強化版パーサー（絶対に抜けなくする）
+  // 強化版パーサー
   const enMatch = fullText.match(/EN:\s*([\s\S]*?)(?:JP:|$)/);
   const jpMatch = fullText.match(/JP:\s*([\s\S]*)/);
 
@@ -114,7 +114,7 @@ async function createEdwardReply(userText, history) {
 }
 
 /* ========= TTS（英語だけ） ========= */
-async function synthesizeEdwardVoice(text) {
+async function synthesizeRachelVoice(text) {
   const trimmed = text.slice(0, 800);
 
   const mp3 = await openai.audio.speech.create({
@@ -130,6 +130,7 @@ async function synthesizeEdwardVoice(text) {
 
 /* ========= Storage に mp3 保存 ========= */
 async function uploadAudioToSupabase(userId, audioBuffer) {
+  // バケット名は既存の edward-audio を流用（インフラ名なのでこのままでOK）
   const fileName = `audio/${userId}-${Date.now()}.mp3`;
 
   const { error } = await supabase.storage
@@ -144,7 +145,9 @@ async function uploadAudioToSupabase(userId, audioBuffer) {
     throw error;
   }
 
-  const { data } = supabase.storage.from("edward-audio").getPublicUrl(fileName);
+  const { data } = supabase.storage
+    .from("edward-audio")
+    .getPublicUrl(fileName);
 
   return { publicUrl: data.publicUrl, durationMs: 8000 };
 }
@@ -152,7 +155,7 @@ async function uploadAudioToSupabase(userId, audioBuffer) {
 /* ========= 音声 → 文字起こし ========= */
 async function transcribeAudio(buffer) {
   try {
-    const tmp = path.join(os.tmpdir(), `ed-${Date.now()}.m4a`);
+    const tmp = path.join(os.tmpdir(), `rachel-${Date.now()}.m4a`);
     fs.writeFileSync(tmp, buffer);
 
     const result = await openai.audio.transcriptions.create({
@@ -195,13 +198,13 @@ async function handleEvent(event) {
       await saveMessage(userId, "user", userText, "text");
 
       const history = await getRecentMessages(userId);
-      const { english, japanese } = await createEdwardReply(userText, history);
+      const { english, japanese } = await createRachelReply(userText, history);
 
-      // 英語と日本語を分けて保存（重要）
+      // 英語と日本語を別レコードで保存
       await saveMessage(userId, "assistant", english, "text");
       await saveMessage(userId, "assistant", japanese, "text");
 
-      const audioBuffer = await synthesizeEdwardVoice(english);
+      const audioBuffer = await synthesizeRachelVoice(english);
       const { publicUrl, durationMs } = await uploadAudioToSupabase(
         userId,
         audioBuffer
@@ -238,12 +241,12 @@ async function handleEvent(event) {
       await saveMessage(userId, "user", userText, "audio");
 
       const history = await getRecentMessages(userId);
-      const { english, japanese } = await createEdwardReply(userText, history);
+      const { english, japanese } = await createRachelReply(userText, history);
 
       await saveMessage(userId, "assistant", english, "text");
       await saveMessage(userId, "assistant", japanese, "text");
 
-      const audioReply = await synthesizeEdwardVoice(english);
+      const audioReply = await synthesizeRachelVoice(english);
       const { publicUrl, durationMs } = await uploadAudioToSupabase(
         userId,
         audioReply
@@ -270,7 +273,7 @@ async function handleEvent(event) {
     console.error("handleEvent error:", e);
     await lineClient.replyMessage(replyToken, {
       type: "text",
-      text: "エラーが発生しました。",
+      text: "レイチェルとの会話中にエラーが発生しました。",
     });
   }
 }
@@ -278,5 +281,5 @@ async function handleEvent(event) {
 /* ========= サーバー起動 ========= */
 const port = process.env.PORT || 10000;
 app.listen(port, () => {
-  console.log(`Edward LINE bot v2 is running on port ${port}`);
+  console.log(`Rachel LINE bot v2 is running on port ${port}`);
 });
