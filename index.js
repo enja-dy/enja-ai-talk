@@ -1,5 +1,5 @@
-// index.js — Edward（LINE × AI英会話 完全修正版）
-// ---------------------------------------------
+// index.js — Edward（LINE × AI英会話 完全版 v2）
+// --------------------------------------------------
 
 import express from "express";
 import * as line from "@line/bot-sdk";
@@ -18,10 +18,14 @@ const lineClient = new line.Client(config);
 
 /* ========= Express ========= */
 const app = express();
-app.get("/", (req, res) => res.send("Edward is running."));
+app.get("/", (req, res) => {
+  res.send("Edward LINE bot is running v2.");
+});
 
 /* ========= OpenAI ========= */
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 /* ========= Supabase ========= */
 const supabase = createClient(
@@ -58,33 +62,38 @@ async function getRecentMessages(userId, limit = 10) {
   return (data || []).reverse();
 }
 
-/* ========= Edward の人格 ========= */
+/* ========= Edward の人格設定 ========= */
 const SYSTEM_PROMPT = `
 あなたは「Edward（エドワード）」です。
 35歳のアメリカ人男性ニュースアナウンサー。
 
 【キャラクター】
-- 直近の会話履歴（最大10件）を必ず踏まえて返答
-- 落ち着いた丁寧な英語
-- 1〜3文の英語で返答し、質問を添える
-- 日本語訳も返すが、履歴に日本語は含めない
+- 落ち着いた丁寧な英会話パートナー
+- 中級レベルの英語を使う
+- 直近10件の会話を必ず踏まえて返答
+- 1〜3文の英語で話し、簡単な質問を添える
 
-【出力形式】
-必ず次の形式で返答すること：
-
-EN: （Edwardの英語の返答）
-JP: （自然な日本語訳）
+【重要】
+あなたの返答は EN と JP の2種類を必ず返してください。
 `;
 
 /* ========= Edward の返事（英文＋日本語訳） ========= */
 async function createEdwardReply(userText, history) {
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
+
+    // 日本語訳を履歴に混ぜない
     ...history.map((m) => ({
       role: m.role === "assistant" ? "assistant" : "user",
-      content: m.content, // ← 日本語が混ざらないように修正済
+      content: m.content,
     })),
-    { role: "user", content: userText },
+
+    {
+      role: "user",
+      content:
+        userText +
+        "\n\n上記に対する返答を必ず次の形式で返してください。\nEN: （英語の返答）\nJP: （自然な日本語訳）\n絶対にこの形式から外れないこと。",
+    },
   ];
 
   const res = await openai.chat.completions.create({
@@ -94,19 +103,20 @@ async function createEdwardReply(userText, history) {
 
   const fullText = res.choices[0]?.message?.content ?? "";
 
-  // 強化版パーサー
-  const enMatch = fullText.match(/EN:\s*([\s\S]*?)\nJP:/);
+  // 強化版パーサー（絶対に抜けなくする）
+  const enMatch = fullText.match(/EN:\s*([\s\S]*?)(?:JP:|$)/);
   const jpMatch = fullText.match(/JP:\s*([\s\S]*)/);
 
-  const english = enMatch ? enMatch[1].trim() : fullText.trim();
-  const japanese = jpMatch ? jpMatch[1].trim() : "（日本語訳の抽出に失敗しました）";
+  const english = enMatch ? enMatch[1].trim() : "";
+  const japanese = jpMatch ? jpMatch[1].trim() : "";
 
   return { english, japanese };
 }
 
-/* ========= TTS（英語のみ） ========= */
+/* ========= TTS（英語だけ） ========= */
 async function synthesizeEdwardVoice(text) {
   const trimmed = text.slice(0, 800);
+
   const mp3 = await openai.audio.speech.create({
     model: "gpt-4o-mini-tts",
     voice: "alloy",
@@ -118,7 +128,7 @@ async function synthesizeEdwardVoice(text) {
   return Buffer.from(arrayBuffer);
 }
 
-/* ========= Storageに音声アップロード ========= */
+/* ========= Storage に mp3 保存 ========= */
 async function uploadAudioToSupabase(userId, audioBuffer) {
   const fileName = `audio/${userId}-${Date.now()}.mp3`;
 
@@ -134,17 +144,15 @@ async function uploadAudioToSupabase(userId, audioBuffer) {
     throw error;
   }
 
-  const { data } = supabase.storage
-    .from("edward-audio")
-    .getPublicUrl(fileName);
+  const { data } = supabase.storage.from("edward-audio").getPublicUrl(fileName);
 
   return { publicUrl: data.publicUrl, durationMs: 8000 };
 }
 
-/* ========= STT ========= */
+/* ========= 音声 → 文字起こし ========= */
 async function transcribeAudio(buffer) {
   try {
-    const tmp = path.join(os.tmpdir(), `edward-${Date.now()}.m4a`);
+    const tmp = path.join(os.tmpdir(), `ed-${Date.now()}.m4a`);
     fs.writeFileSync(tmp, buffer);
 
     const result = await openai.audio.transcriptions.create({
@@ -189,7 +197,7 @@ async function handleEvent(event) {
       const history = await getRecentMessages(userId);
       const { english, japanese } = await createEdwardReply(userText, history);
 
-      // ★ 英語と日本語を別レコードで保存 ← これが重要！
+      // 英語と日本語を分けて保存（重要）
       await saveMessage(userId, "assistant", english, "text");
       await saveMessage(userId, "assistant", japanese, "text");
 
@@ -201,7 +209,7 @@ async function handleEvent(event) {
 
       await lineClient.replyMessage(replyToken, [
         { type: "text", text: english },
-        { type: "text", text: japanese },
+        { type: "text", text: japanese || "（日本語訳の生成に失敗しました）" },
         {
           type: "audio",
           originalContentUrl: publicUrl,
@@ -222,7 +230,7 @@ async function handleEvent(event) {
       if (!userText) {
         await lineClient.replyMessage(replyToken, {
           type: "text",
-          text: "音声を認識できませんでした。もう一度お願いします。",
+          text: "音声をうまく認識できませんでした。もう一度お願いします。",
         });
         return;
       }
@@ -243,7 +251,7 @@ async function handleEvent(event) {
 
       await lineClient.replyMessage(replyToken, [
         { type: "text", text: english },
-        { type: "text", text: japanese },
+        { type: "text", text: japanese || "（日本語訳の生成に失敗しました）" },
         {
           type: "audio",
           originalContentUrl: publicUrl,
@@ -253,9 +261,10 @@ async function handleEvent(event) {
       return;
     }
 
+    // その他のメッセージ
     await lineClient.replyMessage(replyToken, {
       type: "text",
-      text: "テキストか音声で話しかけてください。",
+      text: "テキストか音声メッセージで話しかけてください。",
     });
   } catch (e) {
     console.error("handleEvent error:", e);
@@ -266,6 +275,8 @@ async function handleEvent(event) {
   }
 }
 
-/* ========= 起動 ========= */
+/* ========= サーバー起動 ========= */
 const port = process.env.PORT || 10000;
-app.listen(port, () => console.log(`Edward running on port ${port}`));
+app.listen(port, () => {
+  console.log(`Edward LINE bot v2 is running on port ${port}`);
+});
