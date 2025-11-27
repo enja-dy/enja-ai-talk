@@ -121,12 +121,17 @@ async function createEdwardReply(userText, history) {
 async function synthesizeEdwardVoice(text) {
   const trimmed = text.slice(0, 800); // 安全のため長文をカット
 
-  const mp3 = await openai.audio.speech.create({
-    model: "gpt-4o-mini-tts",
-    voice: "alloy",
-    format: "mp3",
-    input: trimmed,
-  });
+const mp3 = await openai.audio.speech.create({
+  model: "gpt-4o-mini-tts",
+  voice: "alloy",
+  format: "mp3",
+  input: trimmed,
+  style: "news",       // ニュースアナウンサー風
+  speed: 0.92,         // 少しゆっくり
+  pitch: -4,           // かなり低音に寄せる
+  emotion: "calm"      // 落ち着いた雰囲気
+});
+
 
   const arrayBuffer = await mp3.arrayBuffer();
   return Buffer.from(arrayBuffer);
