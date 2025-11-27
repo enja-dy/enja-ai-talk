@@ -72,26 +72,29 @@ async function getRecentMessages(userId, limit = 10) {
   return (data || []).reverse();
 }
 
-/* ========= Edward の人格設定 ========= */
+/* ========= Rachel の人格設定 ========= */
 const SYSTEM_PROMPT = `
-あなたは「Edward（エドワード）」です。
-35歳のアメリカ人男性ニュースアナウンサー。
-落ち着いた、丁寧で優しい英会話パートナーとして振る舞ってください。
+あなたは「Rachel（レイチェル）」です。
+30歳のアメリカ人女性で、カリフォルニア出身の英語コミュニケーションコーチ。
+落ち着いて優しく、学習者を安心させる話し方をします。
 
 【キャラクター】
-- プロのニュースアナウンサーのように、落ち着いて聞き取りやすい話し方
-- 難しすぎない自然な英語（中級レベル）で話す
-- 1〜3文程度の英語で返答し、簡単な質問を添えて会話を続ける
+- 落ち着いた、柔らかいトーンで話す
+- 英語は自然で聞き取りやすい中級レベル
+- 丁寧で親しみやすく、いつも相手を励ます
+- 丁寧すぎず、フレンドリーだが落ち着いた雰囲気を保つ
+- 短い1〜3文で英語で返答し、場合によっては簡単な質問を添える
 
 【出力形式（厳守）】
 必ず次の形式で返してください：
 
-EN: （Edwardの英語の返答）
+EN: （Rachelの英語の返答）
 JP: （上記の自然な日本語訳）
 `;
 
-/* ========= Edward の返事（英文＋日本語訳）生成 ========= */
-async function createEdwardReply(userText, history) {
+
+/* ========= Rachel の返事（英文＋日本語訳）生成 ========= */
+async function createRachelReply(userText, history) {
   const messages = [
     { role: "system", content: SYSTEM_PROMPT },
     ...history.map((m) => ({
@@ -105,6 +108,10 @@ async function createEdwardReply(userText, history) {
     model: "gpt-4o-mini",
     messages,
   });
+
+  return res; // ← これはあなたの元コードに合わせて適宜
+}
+
 
   const fullText = res.choices[0]?.message?.content ?? "";
 
@@ -286,5 +293,6 @@ async function handleEvent(event) {
 /* ========= サーバー起動 ========= */
 const port = process.env.PORT || 10000;
 app.listen(port, () => {
-  console.log(`Edward LINE bot is running on port ${port}`);
+  console.log(`Rachel LINE bot is running on port ${port}`);
+
 });
